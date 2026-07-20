@@ -32,7 +32,7 @@ homepage = "https://github.com/chronista-club/club-kdl"
 [workspace.dependencies]
 kdl = "6"
 thiserror = "2"
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "3", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = "1"
 

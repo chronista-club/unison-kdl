@@ -5,7 +5,7 @@ derive macro (`#[derive(KdlDeserialize, KdlSerialize)]`) で KDL ↔ Rust struct
 
 - crate: `club-kdl` (lib) / `club-kdl-derive` (proc-macro)
 - repo: https://github.com/chronista-club/club-kdl
-- ライセンス: MIT OR Apache-2.0 / MSRV: Rust 1.94 / edition 2024
+- ライセンス: MIT OR Apache-2.0 / MSRV: Rust 1.95 / edition 2024
 
 詳細な行動指針はグローバル `~/.claude/CLAUDE.md` (Chronista Style) を参照。
 このファイルは club-kdl 固有の事項のみ記載する。

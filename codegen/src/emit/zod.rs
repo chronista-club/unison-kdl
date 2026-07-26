@@ -103,13 +103,31 @@ impl Emitter for ZodEmitter {
                     code.push_str(&render_object(&evt.name, None, &evt.fields));
                     code.push_str("\n\n");
                 }
-                // discriminated-union envelope over the channel's requests,
-                // emitted after the per-request objects it references.
-                if let Some(tag) = &channel.envelope
-                    && !channel.requests.is_empty()
-                {
-                    code.push_str(&render_envelope(channel, tag));
-                    code.push_str("\n\n");
+                // discriminated-union envelopes, emitted after the per-payload
+                // objects they reference: one over the channel's requests, one
+                // over its events (a channel can carry both directions, and the
+                // two sets are dispatched by different peers).
+                if let Some(tag) = &channel.envelope {
+                    let request_names: Vec<&str> =
+                        channel.requests.iter().map(|r| r.name.as_str()).collect();
+                    if !request_names.is_empty() {
+                        code.push_str(&render_envelope(
+                            tag,
+                            &format!("{}Envelope", to_pascal_case(&channel.name)),
+                            &request_names,
+                        ));
+                        code.push_str("\n\n");
+                    }
+                    let event_names: Vec<&str> =
+                        channel.events.iter().map(|e| e.name.as_str()).collect();
+                    if !event_names.is_empty() {
+                        code.push_str(&render_envelope(
+                            tag,
+                            &format!("{}EventEnvelope", to_pascal_case(&channel.name)),
+                            &event_names,
+                        ));
+                        code.push_str("\n\n");
+                    }
                 }
             }
         }
@@ -172,17 +190,16 @@ fn render_object(name: &str, description: Option<&str>, fields: &[ir::Field]) ->
 /// (`tag`) literal, so a runtime value carrying `{ "<tag>": "<wire>" }`
 /// validates against exactly one request payload. A fieldless request's
 /// object is `z.object({})`, which `.extend` still accepts.
-fn render_envelope(channel: &ir::Channel, tag: &str) -> String {
-    let name = format!("{}Envelope", to_pascal_case(&channel.name));
+fn render_envelope(tag: &str, name: &str, members: &[&str]) -> String {
     let mut out = format!(
         "export const {name} = z.discriminatedUnion({}, [\n",
         js_string(tag)
     );
-    for req in &channel.requests {
+    for member in members {
         out.push_str(&format!(
             "  {}.extend({{ {tag}: z.literal({}) }}),\n",
-            to_pascal_case(&req.name),
-            js_string(&req.name),
+            to_pascal_case(member),
+            js_string(member),
         ));
     }
     out.push_str("]);");
@@ -545,6 +562,80 @@ mod tests {
         assert!(
             obj < union,
             "request objects precede the discriminated union"
+        );
+    }
+
+    /// A `from="server"` channel carrying only events — the push-only shape.
+    fn push_schema(envelope: Option<&str>) -> ir::Schema {
+        ir::Schema {
+            protocol: Some(ir::Protocol {
+                name: "push".to_string(),
+                version: "1.0.0".to_string(),
+                namespace: None,
+                description: None,
+                channels: vec![ir::Channel {
+                    name: "push".to_string(),
+                    from: ir::ChannelFrom::Server,
+                    lifetime: ir::ChannelLifetime::Persistent,
+                    backend: ir::ChannelBackend::Stream,
+                    channel_id: None,
+                    envelope: envelope.map(str::to_string),
+                    requests: vec![],
+                    events: vec![ir::Event {
+                        name: "term:ensure_lane".to_string(),
+                        fields: vec![field("lane", ir::Ty::Primitive(ir::Prim::String), true)],
+                    }],
+                }],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn events_only_channel_emits_event_discriminated_union() {
+        let out = ZodEmitter::new().emit(&push_schema(Some("t")));
+        assert!(out.contains("export const PushEventEnvelope = z.discriminatedUnion(\"t\", ["));
+        assert!(out.contains("  TermEnsureLane.extend({ t: z.literal(\"term:ensure_lane\") }),"));
+        assert!(
+            !out.contains("export const PushEnvelope = "),
+            "no requests ⇒ no request union"
+        );
+        // the union must follow the per-event objects it references.
+        let obj = out.find("export const TermEnsureLane").unwrap();
+        let union = out.find("export const PushEventEnvelope").unwrap();
+        assert!(obj < union, "event objects precede the discriminated union");
+    }
+
+    #[test]
+    fn channel_with_both_directions_emits_two_discriminated_unions() {
+        let mut schema = sidebar_schema(Some("t"));
+        schema.protocol.as_mut().unwrap().channels[0].events = vec![ir::Event {
+            name: "topic:event".to_string(),
+            fields: vec![field("body", ir::Ty::Primitive(ir::Prim::String), true)],
+        }];
+        let out = ZodEmitter::new().emit(&schema);
+        assert!(out.contains("export const IpcEnvelope = z.discriminatedUnion(\"t\", ["));
+        assert!(out.contains("export const IpcEventEnvelope = z.discriminatedUnion(\"t\", ["));
+        // the event must not leak into the request union.
+        let req_union = out.split("export const IpcEnvelope = ").nth(1).unwrap();
+        let req_body = req_union.split("]);").next().unwrap();
+        assert!(
+            !req_body.contains("TopicEvent"),
+            "event leaked into the request union"
+        );
+    }
+
+    #[test]
+    fn events_without_envelope_tag_emit_no_union() {
+        // Backward compatibility: envelope generation stays opt-in for events too.
+        let out = ZodEmitter::new().emit(&push_schema(None));
+        assert!(
+            !out.contains("z.discriminatedUnion"),
+            "no envelope tag ⇒ no union"
+        );
+        assert!(
+            out.contains("export const TermEnsureLane = z.object({"),
+            "objects still emit"
         );
     }
 

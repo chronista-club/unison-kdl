@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-26
+
 ### 追加
 
 - **codegen**: channel の **event** に対しても discriminated-union envelope

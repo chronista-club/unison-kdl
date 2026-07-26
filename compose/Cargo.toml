@@ -21,7 +21,7 @@ path = "src/lib.rs"
 [dependencies]
 # club-kdl 本体は from_doc<T> のために path 依存で参照。
 # crates.io publish のため path 依存にも version を明示。
-club-kdl = { path = "..", version = "0.11.1" }
+club-kdl = { path = "..", version = "0.12.0" }
 kdl.workspace = true
 thiserror.workspace = true
 # Phase 2.1 の (<)glob variant 用。

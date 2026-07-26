@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/club-kdl/badge.svg)](https://docs.rs/club-kdl)
 [![CI](https://github.com/chronista-club/club-kdl/actions/workflows/ci.yml/badge.svg)](https://github.com/chronista-club/club-kdl/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![MSRV](https://img.shields.io/badge/MSRV-1.94-orange.svg)](https://github.com/chronista-club/club-kdl/blob/main/Cargo.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-orange.svg)](https://github.com/chronista-club/club-kdl/blob/main/Cargo.toml)
 [![Downloads](https://img.shields.io/crates/d/club-kdl.svg)](https://crates.io/crates/club-kdl)
 
 **[English](README.md)** | 日本語
@@ -492,7 +492,7 @@ cargo bench --bench kdl_vs_json
 
 ## MSRV (Minimum Supported Rust Version)
 
-現在の MSRV は **Rust 1.94** です。 `Cargo.toml` の `rust-version` フィールドで管理し、 CI で継続的に検証しています。
+現在の MSRV は **Rust 1.95** です。 `Cargo.toml` の `rust-version` フィールドで管理し、 CI で継続的に検証しています。
 
 MSRV の引き上げは **patch リリースで行うことがあります** (semver の慣習に準拠)。
 

@@ -7,6 +7,26 @@
 
 ## [Unreleased]
 
+### 追加
+
+- **codegen**: channel の **event** に対しても discriminated-union envelope
+  (`{Channel}EventEnvelope`) を生成するようにした。従来 `envelope="<tag>"` は
+  **request にしか** union を出さず、event は payload 型だけが生成されて
+  受け手が判別に使える型が無かった（受信側が手書きで match するしかなく、
+  envelope を置く意味が失われていた）。rust / typescript / zod の 3 emitter が対象
+  （surrealql には envelope の概念が無い）。
+  request 側の `{Channel}Envelope` は名前も内容も不変で、envelope 生成は
+  **opt-in のまま**（tag 未宣言の channel は event があっても何も増えない）。PR #33
+
+### 変更
+
+- **MSRV: 1.94 → 1.95**。依存の `kdl` が 6.6.0 で MSRV を 1.82 → 1.95 に
+  引き上げたため、宣言 MSRV では **そもそもビルドできない**状態になっていた
+  （`Cargo.lock` は untracked なので CI は毎回解決し直し、6.6+ を引く）。
+  1.94 を維持するには `kdl` を 6.5 に固定して upstream の修正を止める必要があり、
+  実態に合わせて宣言側を上げる判断。PR #33
+
+
 ## [0.11.1] - 2026-05-25
 
 ### 修正

@@ -323,8 +323,10 @@ fn id_field() -> ir::Field {
 /// schema name (`process:toggle`) becomes a valid Rust identifier
 /// (`ProcessToggle`).
 ///
-/// When the channel declares `envelope="<tag>"`, a discriminated-union enum
-/// bundling every request payload is appended (see [`render_envelope_enum`]).
+/// When the channel declares `envelope="<tag>"`, discriminated-union enums
+/// bundling the channel's payloads are appended — one over its requests
+/// (`{Channel}Envelope`) and one over its events (`{Channel}EventEnvelope`).
+/// See [`render_envelope_enum`].
 fn render_channel(channel: &ir::Channel) -> String {
     let mut out = String::new();
     for req in &channel.requests {
@@ -351,43 +353,82 @@ fn render_channel(channel: &ir::Channel) -> String {
             &evt.fields,
         ));
     }
-    if let Some(tag) = &channel.envelope
-        && !channel.requests.is_empty()
-    {
-        out.push('\n');
-        out.push_str(&render_envelope_enum(channel, tag));
+    if let Some(tag) = &channel.envelope {
+        if !channel.requests.is_empty() {
+            let members: Vec<(&str, &[ir::Field])> = channel
+                .requests
+                .iter()
+                .map(|req| (req.name.as_str(), req.fields.as_slice()))
+                .collect();
+            out.push('\n');
+            out.push_str(&render_envelope_enum(
+                &channel.name,
+                tag,
+                &format!("{}Envelope", to_pascal_case(&channel.name)),
+                "requests",
+                &members,
+            ));
+        }
+        // Events get their own envelope: a channel can carry both directions
+        // (a `from="client"` channel whose server pushes events back), and the
+        // two sets are dispatched by different peers. Bundling them into one
+        // union would force each side to match arms it can never receive.
+        if !channel.events.is_empty() {
+            let members: Vec<(&str, &[ir::Field])> = channel
+                .events
+                .iter()
+                .map(|evt| (evt.name.as_str(), evt.fields.as_slice()))
+                .collect();
+            out.push('\n');
+            out.push_str(&render_envelope_enum(
+                &channel.name,
+                tag,
+                &format!("{}EventEnvelope", to_pascal_case(&channel.name)),
+                "events",
+                &members,
+            ));
+        }
     }
     out
 }
 
-/// Render the channel's envelope `enum`: an internally `#[serde(tag = "...")]`
-/// discriminated union bundling every request payload.
+/// Render an envelope `enum`: an internally `#[serde(tag = "...")]`
+/// discriminated union bundling one direction's payloads.
 ///
-/// A request carrying fields becomes a newtype variant wrapping its payload
-/// struct (`ProcessToggle(ProcessToggle)`); a fieldless request becomes a unit
+/// A member carrying fields becomes a newtype variant wrapping its payload
+/// struct (`ProcessToggle(ProcessToggle)`); a fieldless member becomes a unit
 /// variant (`ProcessAdd`). The unit form is required — serde rejects an
 /// internally tagged newtype variant that wraps a unit struct at runtime.
 ///
-/// The variant identifier is the PascalCased request name; the original
+/// The variant identifier is the PascalCased member name; the original
 /// (possibly `:`-bearing) wire name is preserved with `#[serde(rename = ...)]`
 /// whenever sanitizing changed it.
-fn render_envelope_enum(channel: &ir::Channel, tag: &str) -> String {
-    let enum_name = format!("{}Envelope", to_pascal_case(&channel.name));
+///
+/// `members` is `(wire name, payload fields)` in source order — requests and
+/// events share this shape, so both directions render through one path.
+/// `member_kind` names the direction in the doc comment (`"requests"` /
+/// `"events"`).
+fn render_envelope_enum(
+    channel_name: &str,
+    tag: &str,
+    enum_name: &str,
+    member_kind: &str,
+    members: &[(&str, &[ir::Field])],
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "/// Envelope enum for channel {:?} — a discriminated union over its\n\
-         /// requests, internally tagged by the {tag:?} field.\n",
-        channel.name
+        "/// Envelope enum for channel {channel_name:?} — a discriminated union over its\n\
+         /// {member_kind}, internally tagged by the {tag:?} field.\n"
     ));
     out.push_str("#[derive(Debug, Clone, Serialize, Deserialize)]\n");
     out.push_str(&format!("#[serde(tag = \"{tag}\")]\n"));
     out.push_str(&format!("pub enum {enum_name} {{\n"));
-    for req in &channel.requests {
-        let variant = to_pascal_case(&req.name);
-        if variant != req.name {
-            out.push_str(&format!("    #[serde(rename = \"{}\")]\n", req.name));
+    for (name, fields) in members {
+        let variant = to_pascal_case(name);
+        if variant != *name {
+            out.push_str(&format!("    #[serde(rename = \"{name}\")]\n"));
         }
-        if req.fields.is_empty() {
+        if fields.is_empty() {
             out.push_str(&format!("    {variant},\n"));
         } else {
             out.push_str(&format!("    {variant}({variant}),\n"));
@@ -679,6 +720,94 @@ mod tests {
         assert!(
             !out.contains("ProcessAdd(ProcessAdd)"),
             "fieldless request must not become a newtype variant"
+        );
+    }
+
+    /// A `from="server"` channel that carries only events — the push-only shape
+    /// (Rust → webview, pubsub fan-out). Before events were enveloped, such a
+    /// channel emitted payload structs but nothing to dispatch on.
+    fn push_channel(envelope: Option<&str>) -> ir::Channel {
+        ir::Channel {
+            name: "push".to_string(),
+            from: ir::ChannelFrom::Server,
+            lifetime: ir::ChannelLifetime::Persistent,
+            backend: ir::ChannelBackend::Stream,
+            channel_id: None,
+            envelope: envelope.map(str::to_string),
+            requests: vec![],
+            events: vec![
+                ir::Event {
+                    name: "term:ensure_lane".to_string(),
+                    fields: vec![
+                        field("lane", ir::Ty::Primitive(ir::Prim::String), true),
+                        field("session", ir::Ty::Primitive(ir::Prim::Int), true),
+                    ],
+                },
+                ir::Event {
+                    name: "term:clear".to_string(),
+                    fields: vec![],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn events_only_channel_emits_event_envelope() {
+        let out = RustEmitter::new().emit(&protocol_schema(push_channel(Some("t"))));
+        assert!(out.contains("#[serde(tag = \"t\")]"), "internally tagged");
+        assert!(
+            out.contains("pub enum PushEventEnvelope {"),
+            "enum named <Channel>EventEnvelope"
+        );
+        // an event with fields → newtype variant wrapping its struct.
+        assert!(out.contains("    #[serde(rename = \"term:ensure_lane\")]"));
+        assert!(out.contains("    TermEnsureLane(TermEnsureLane),"));
+        // a fieldless event → unit variant (serde rejects newtype-of-unit).
+        assert!(out.contains("    TermClear,\n"));
+        assert!(
+            !out.contains("TermClear(TermClear)"),
+            "fieldless event must not become a newtype variant"
+        );
+        // request-side envelope is not emitted for a request-less channel.
+        assert!(
+            !out.contains("pub enum PushEnvelope {"),
+            "no requests ⇒ no request envelope"
+        );
+    }
+
+    #[test]
+    fn channel_with_both_directions_emits_two_envelopes() {
+        // A `from="client"` channel whose server pushes events back (unison's
+        // pubsub shape). The two sets are dispatched by different peers, so each
+        // gets its own union rather than one mixed enum.
+        let mut channel = sidebar_channel(Some("t"));
+        channel.events = vec![ir::Event {
+            name: "topic:event".to_string(),
+            fields: vec![field("body", ir::Ty::Primitive(ir::Prim::String), true)],
+        }];
+        let out = RustEmitter::new().emit(&protocol_schema(channel));
+        assert!(out.contains("pub enum IpcEnvelope {"), "requests envelope");
+        assert!(
+            out.contains("pub enum IpcEventEnvelope {"),
+            "events envelope"
+        );
+        // the event must not leak into the request envelope.
+        let req_enum = out.split("pub enum IpcEnvelope {").nth(1).unwrap();
+        let req_body = req_enum.split("}\n").next().unwrap();
+        assert!(
+            !req_body.contains("TopicEvent"),
+            "event leaked into the request envelope"
+        );
+    }
+
+    #[test]
+    fn events_without_envelope_tag_emit_no_enum() {
+        // Backward compatibility: envelope generation stays opt-in for events too.
+        let out = RustEmitter::new().emit(&protocol_schema(push_channel(None)));
+        assert!(!out.contains("pub enum"), "no envelope tag ⇒ no enum");
+        assert!(
+            out.contains("pub struct TermEnsureLane"),
+            "structs still emit"
         );
     }
 

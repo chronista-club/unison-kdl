@@ -451,34 +451,57 @@ fn render_channel(channel: &ir::Channel) -> String {
     ));
     code.push_str("} as const;\n");
 
-    // Discriminated-union envelope over the channel's requests (opt-in via
-    // `envelope="<tag>"`). Each arm intersects the tag literal with the
-    // request's payload `interface`; a fieldless request's interface is `{}`,
-    // so the arm collapses to the tag literal alone.
-    if let Some(tag) = &channel.envelope
-        && !channel.requests.is_empty()
-    {
-        let envelope_name = format!("{pascal}Envelope");
-        code.push_str(&format!(
-            "\n/** Envelope union for channel \"{}\" — discriminated on {tag:?}. */\n",
-            channel.name
-        ));
-        code.push_str(&format!("export type {envelope_name} =\n"));
-        let arms: Vec<String> = channel
-            .requests
-            .iter()
-            .map(|req| {
-                format!(
-                    "  | ({{ {tag}: {:?} }} & {})",
-                    req.name,
-                    to_pascal_case(&req.name)
-                )
-            })
-            .collect();
-        code.push_str(&arms.join("\n"));
-        code.push_str(";\n");
+    // Discriminated-union envelopes (opt-in via `envelope="<tag>"`): one over
+    // the channel's requests, one over its events. Each arm intersects the tag
+    // literal with the payload `interface`; a fieldless payload's interface is
+    // `{}`, so the arm collapses to the tag literal alone.
+    //
+    // Events get their own union because a channel can carry both directions
+    // (a `from="client"` channel whose server pushes events back), and the two
+    // sets are dispatched by different peers — one union would force each side
+    // to handle arms it can never receive.
+    if let Some(tag) = &channel.envelope {
+        let request_names: Vec<&str> = channel.requests.iter().map(|r| r.name.as_str()).collect();
+        if !request_names.is_empty() {
+            code.push_str(&render_envelope_union(
+                &channel.name,
+                tag,
+                &format!("{pascal}Envelope"),
+                &request_names,
+            ));
+        }
+        let event_names: Vec<&str> = channel.events.iter().map(|e| e.name.as_str()).collect();
+        if !event_names.is_empty() {
+            code.push_str(&render_envelope_union(
+                &channel.name,
+                tag,
+                &format!("{pascal}EventEnvelope"),
+                &event_names,
+            ));
+        }
     }
 
+    code
+}
+
+/// Render one discriminated-union envelope over `members` (wire names in source
+/// order), discriminated on `tag`.
+fn render_envelope_union(
+    channel_name: &str,
+    tag: &str,
+    union_name: &str,
+    members: &[&str],
+) -> String {
+    let mut code = format!(
+        "\n/** Envelope union for channel \"{channel_name}\" — discriminated on {tag:?}. */\n"
+    );
+    code.push_str(&format!("export type {union_name} =\n"));
+    let arms: Vec<String> = members
+        .iter()
+        .map(|name| format!("  | ({{ {tag}: {name:?} }} & {})", to_pascal_case(name)))
+        .collect();
+    code.push_str(&arms.join("\n"));
+    code.push_str(";\n");
     code
 }
 
@@ -730,6 +753,79 @@ mod tests {
         );
         assert!(out.contains("  | ({ t: \"process:toggle\" } & ProcessToggle)"));
         assert!(out.contains("  | ({ t: \"process:add\" } & ProcessAdd)"));
+    }
+
+    /// A `from="server"` channel carrying only events — the push-only shape.
+    fn push_schema(envelope: Option<&str>) -> ir::Schema {
+        ir::Schema {
+            protocol: Some(ir::Protocol {
+                name: "push".to_string(),
+                version: "1.0.0".to_string(),
+                namespace: None,
+                description: None,
+                channels: vec![ir::Channel {
+                    name: "push".to_string(),
+                    from: ir::ChannelFrom::Server,
+                    lifetime: ir::ChannelLifetime::Persistent,
+                    backend: ir::ChannelBackend::Stream,
+                    channel_id: None,
+                    envelope: envelope.map(str::to_string),
+                    requests: vec![],
+                    events: vec![ir::Event {
+                        name: "term:ensure_lane".to_string(),
+                        fields: vec![field("lane", ir::Ty::Primitive(ir::Prim::String), true)],
+                    }],
+                }],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn events_only_channel_emits_event_union() {
+        let out = TypeScriptEmitter::new().emit(&push_schema(Some("t")));
+        assert!(
+            out.contains("export type PushEventEnvelope ="),
+            "union named <Channel>EventEnvelope"
+        );
+        assert!(out.contains("  | ({ t: \"term:ensure_lane\" } & TermEnsureLane)"));
+        assert!(
+            !out.contains("export type PushEnvelope ="),
+            "no requests ⇒ no request union"
+        );
+    }
+
+    #[test]
+    fn channel_with_both_directions_emits_two_unions() {
+        let mut schema = sidebar_schema(Some("t"));
+        schema.protocol.as_mut().unwrap().channels[0].events = vec![ir::Event {
+            name: "topic:event".to_string(),
+            fields: vec![field("body", ir::Ty::Primitive(ir::Prim::String), true)],
+        }];
+        let out = TypeScriptEmitter::new().emit(&schema);
+        assert!(out.contains("export type IpcEnvelope ="), "requests union");
+        assert!(
+            out.contains("export type IpcEventEnvelope ="),
+            "events union"
+        );
+        // the event must not leak into the request union.
+        let req_union = out.split("export type IpcEnvelope =").nth(1).unwrap();
+        let req_body = req_union.split(";\n").next().unwrap();
+        assert!(
+            !req_body.contains("TopicEvent"),
+            "event leaked into the request union"
+        );
+    }
+
+    #[test]
+    fn events_without_envelope_tag_emit_no_union() {
+        // Backward compatibility: envelope generation stays opt-in for events too.
+        let out = TypeScriptEmitter::new().emit(&push_schema(None));
+        assert!(!out.contains("EventEnvelope"), "no envelope tag ⇒ no union");
+        assert!(
+            out.contains("export interface TermEnsureLane {"),
+            "interfaces still emit"
+        );
     }
 
     // -------------------------------------------------------------------------

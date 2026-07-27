@@ -19,7 +19,7 @@ jobs:
     name: fmt / clippy / doc
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -45,7 +45,7 @@ jobs:
           - os: ubuntu-latest
             toolchain: beta
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -64,7 +64,7 @@ jobs:
     name: MSRV (rust-version field)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Read MSRV from Cargo.toml
         id: msrv
         run: |
@@ -88,7 +88,7 @@ jobs:
     name: cargo-deny (license / advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   semver-checks:
@@ -96,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: club-kdl
